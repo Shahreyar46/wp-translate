@@ -1,0 +1,66 @@
+{
+  "name": "wp-auto-i18n",
+  "version": "1.0.0",
+  "description": "Automatic WordPress plugin translation toolkit — generates .pot, .po, .mo files with AI-powered translation. Works with Claude Code, Cursor, Copilot, and any AI.",
+  "main": "scripts/scanner.js",
+  "bin": {
+    "wp-auto-i18n": "./bin/cli.js"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.js --install",
+    "check": "node scripts/setup.js --check",
+    "test": "node test/smoke.js"
+  },
+  "keywords": [
+    "wordpress",
+    "i18n",
+    "l10n",
+    "translation",
+    "pot",
+    "po",
+    "mo",
+    "gettext",
+    "internationalization",
+    "localization",
+    "wp-cli",
+    "deepl",
+    "google-translate",
+    "claude",
+    "ai-translation",
+    "wordpress-plugin"
+  ],
+  "author": {
+    "name": "MD. AL-Shahreyar",
+    "url": "https://github.com/Shahreyar46"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "gettext-parser": "^9.0.1"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@google-cloud/translate": "^9.3.0",
+    "deepl-node": "^1.24.0",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.0.0"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "SKILL.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Shahreyar46/wp-auto-i18n.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Shahreyar46/wp-auto-i18n/issues"
+  },
+  "homepage": "https://github.com/Shahreyar46/wp-auto-i18n#readme"
+}
