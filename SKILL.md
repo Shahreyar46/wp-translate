@@ -28,8 +28,9 @@ These rules apply whether you are **Claude, Gemini, GPT-4, Copilot, Mistral, Lla
 ### RULE 3 — Write files using tools, not bash echo/cat
 - Use the **Write tool** to create the `.po` file (chunk 1 = header + first ~300 strings)
 - Use the **Edit tool** to append subsequent chunks by targeting the last few lines as `old_string`
-- On Windows: do NOT use `cat >> file << 'EOF'` heredoc — it breaks
-- Safe alternative for appending via shell: `node -e "require('fs').appendFileSync('FILE', 'CONTENT', 'utf8')"`
+- On Windows: do NOT use `cat >> file << 'EOF'` heredoc — **it mangles backslash escapes**, breaking regex patterns like `\\"/g` into `/g`. This causes silent failures in patch scripts.
+- Always use the **Write tool** for any `.js` patch/extract scripts too — not heredoc
+- Safe alternative for appending via shell (small strings only): `node -e "require('fs').appendFileSync('FILE', 'CONTENT', 'utf8')"`
 
 ### RULE 4 — Chunked writing for large files
 - **Under 400 strings** → Write everything in ONE Write call
@@ -64,7 +65,7 @@ These rules apply whether you are **Claude, Gemini, GPT-4, Copilot, Mistral, Lla
 
 ---
 
-## STEP 0B — Detect Mode: Fresh Translation vs. Update
+## STEP 0B — Detect Mode: Fresh Translation vs. Update vs. Fix-Only
 
 **Before doing anything else**, check whether existing `.po` files already exist for this plugin:
 
@@ -74,8 +75,22 @@ const fs=require('fs'), path=require('path');
 const langDir='<PLUGIN_PATH>/languages';
 if(!fs.existsSync(langDir)){console.log('MODE=fresh'); process.exit();}
 const pos=fs.readdirSync(langDir).filter(f=>f.endsWith('.po'));
-console.log(pos.length>0 ? 'MODE=update' : 'MODE=fresh');
+if(pos.length===0){console.log('MODE=fresh'); process.exit();}
+// Check if any .po file has untranslated strings (empty msgstr OR msgstr==msgid)
+let hasUntranslated=false;
+pos.forEach(f=>{
+  const lines=fs.readFileSync(path.join(langDir,f),'utf8').split('\n');
+  for(let i=0;i<lines.length;i++){
+    if(lines[i].startsWith('msgstr ') && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1]!='msgid \"\"'){
+      const id=lines[i-1].replace(/^msgid /,'');
+      const str=lines[i].replace(/^msgstr /,'');
+      if(str==='\"\"' || str===id) hasUntranslated=true;
+    }
+  }
+});
+console.log('MODE=update');
 console.log('EXISTING_PO='+pos.join(','));
+console.log('HAS_UNTRANSLATED='+hasUntranslated);
 "
 ```
 
@@ -83,7 +98,12 @@ console.log('EXISTING_PO='+pos.join(','));
 All languages are translated from scratch. Continue to STEP 1.
 
 ### If MODE=update → run the UPDATE pipeline instead (STEP 1 → 2 → 2B → 3B → 4 → 5)
-Existing translations are preserved. Only new strings are translated. See STEP 2B and STEP 3B below.
+Existing translations are preserved. Only new/missing strings are translated. See STEP 2B and STEP 3B below.
+
+### If user says "fix only untranslated / fix missing / fix empty strings" (FIX-ONLY mode):
+**Skip STEP 1, STEP 2, and STEP 2B entirely.** Go directly to STEP 3B.
+Do NOT regenerate the POT file. Do NOT run merger.js. Do NOT touch strings that already have correct translations.
+The user wants ONLY the empty `msgstr ""` and `msgstr == msgid` cases fixed — all other strings must remain exactly as they are.
 
 **Announce to the user which mode was detected before proceeding.**
 
@@ -125,6 +145,10 @@ Then read the POT file to see all strings. For large POT files (1000+ lines), re
 
 ## STEP 2B — (UPDATE MODE ONLY) Merge New POT into Existing PO Files
 
+> **CRITICAL: merger.js PRESERVES all existing translations. It does NOT reset any msgstr values.**
+> If you are in FIX-ONLY mode (user asked to fix missing/empty strings only), **SKIP THIS STEP ENTIRELY** — go straight to STEP 3B.
+> Never re-run the full pipeline (STEP 1 → 2 → 3) when the user only wants to fix untranslated entries in existing .po files.
+
 Run merger.js to merge the freshly generated POT into all existing `.po` files:
 
 ```bash
@@ -153,57 +177,218 @@ Read the JSON output from merger.js. It will tell you exactly which strings were
 }
 ```
 
-**If `total_added === 0`** — all `.po` files are already up to date. Skip STEP 3B. Go directly to STEP 4 to recompile `.mo` files (references may have changed).
+After merger runs, check for ANY empty `msgstr ""` in each `.po` file — including pre-existing ones that were never translated:
 
-**If `total_added > 0`** — proceed to STEP 3B to translate only the new strings.
+```bash
+node -e "
+const fs=require('fs'), path=require('path');
+const dir='<PLUGIN_PATH>/languages';
+fs.readdirSync(dir).filter(f=>f.endsWith('.po')).forEach(f=>{
+  const content=fs.readFileSync(path.join(dir,f),'utf8');
+  const empty=(content.match(/\nmsgstr \"\"\n/g)||[]).length;
+  console.log(f+': '+empty+' empty msgstr');
+});
+"
+```
+
+**If ALL `.po` files have 0 empty msgstr AND total_added === 0** — fully up to date. Skip STEP 3B. Go to STEP 4 to recompile `.mo` files.
+
+**If ANY `.po` file has empty msgstr (whether newly added OR pre-existing missed translations)** — proceed to STEP 3B to translate all empty strings.
 
 ---
 
-## STEP 3B — (UPDATE MODE ONLY) Translate Only New/Empty Strings
+## STEP 3B — (UPDATE MODE ONLY) Translate All Empty Strings
 
-For each `.po` file that has new strings (added > 0):
+### Strategy: Use a Node.js patch script (REQUIRED for 10+ empty strings)
 
-1. **Read the `.po` file** to see which `msgstr ""` entries are empty
-2. **Translate ONLY those empty entries** — do NOT touch existing non-empty `msgstr` values
-3. **Use Edit tool** to replace each empty `msgstr ""` with the correct translation
+When there are 10 or more empty strings to translate — which is almost always the case in UPDATE MODE — **do NOT use Edit tool per string**. That approach is too slow, error-prone, and will fail or be inconsistent at scale.
 
-### How to find and fill empty strings:
+**Instead, use this mandatory batch approach:**
 
-Read the updated `.po` file. Look for blocks where `msgstr ""` is empty:
+**Step 1:** Write this as a script file using the **Write tool** (NOT bash heredoc — heredoc mangles backslashes on Windows) to `C:/Users/<USER>/extract_untranslated.js`, then run it:
+
+```javascript
+const fs = require('fs'), path = require('path');
+const dir = '<PLUGIN_PATH>/languages';
+
+// Brand/product names and technical terms that are intentionally identical in all languages.
+// Add plugin-specific brand names here as you discover them.
+const keepAsIsSet = new Set([
+  // WordPress ecosystem tool names — same in all languages
+  'Gutenberg', 'Elementor', 'Shortcode', 'Add-ons', 'Self-Hosted',
+  // Common technical terms kept as-is in most languages
+  'Simulcast', 'APP ID', 'Documentation', 'Configurations',
+  // Product/service names — MUST stay as-is
+  // Add plugin-specific brands here e.g.: 'MyPlugin', 'Jitsi Meet', 'WPPOOL'
+]);
+
+// Strings where msgstr==msgid is CORRECT and should NOT be flagged:
+// - URLs (http/https/ftp)
+// - Pure emoji strings (including smart quotes around emoji)
+// - Pure numbers
+// - ALL-LOWERCASE short tokens/slugs (e.g. jitsi, zoom, meeting, video)
+// - Brand names listed in keepAsIsSet above
+// NOTE: Title Case words like "Name", "Domain", "Width" ARE real UI labels — do NOT skip them
+function isIntentionallyIdentical(raw) {
+  const s = raw.replace(/^"|"$/g, '').replace(/\\"/g, '"');
+  if (/^https?:\/\//.test(s)) return true;                          // URL
+  if (/^[\p{Emoji}\s]+$/u.test(s)) return true;                     // emoji only
+  if (/^\d+$/.test(s)) return true;                                  // pure number
+  if (/^[a-z][a-z0-9_-]*$/.test(s) && s.length <= 20) return true; // all-lowercase slug
+  if (keepAsIsSet.has(s)) return true;                               // known brand/tool name
+  return false;
+}
+
+const poFiles = fs.readdirSync(dir).filter(f => f.endsWith('.po'));
+poFiles.forEach(f => {
+  const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+  const missing = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('msgstr ') && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1] !== 'msgid ""') {
+      const idRaw = lines[i-1].replace(/^msgid /, '');
+      const strRaw = lines[i].replace(/^msgstr /, '');
+      const isEmpty = strRaw === '""';
+      const isSameAsId = strRaw === idRaw;
+      if ((isEmpty || isSameAsId) && !isIntentionallyIdentical(idRaw)) {
+        missing.push(idRaw.replace(/^"/, '').replace(/"$/, ''));
+      }
+    }
+  }
+  if (missing.length) {
+    console.log(f + ' (' + missing.length + ' untranslated):');
+    missing.forEach((s, i) => console.log('  ' + i + ': ' + s));
+  } else {
+    console.log(f + ': fully translated');
+  }
+});
+```
+
+**Step 2:** Write the patch script using the **Write tool** to `C:/Users/<USER>/patch_translations.js`.
+
+> **CRITICAL — Windows escaping rule**: NEVER write this script using bash heredoc (`cat << 'EOF'`). Heredoc on Windows mangles backslash escape sequences (turning `\\` into `\`, breaking regex patterns). Always use the Write tool to create the file.
+
+```javascript
+const fs = require('fs'), path = require('path');
+const langDir = '<PLUGIN_PATH>/languages';
+
+// Translation dictionaries keyed by language code
+const translations = {
+  'fr_FR': {
+    'Settings': 'Paramètres',
+    'Referral Settings': 'Paramètres de parrainage',
+    // ... ALL empty strings for this language
+  },
+  'de_DE': {
+    'Settings': 'Einstellungen',
+    // ... ALL empty strings for this language
+  },
+  // ... all other languages
+};
+
+// Auto-detects the .po file for a given language code by scanning the languages directory.
+// Handles both "domain-langCode.po" and "langCode.po" naming conventions.
+// Also handles smart-quote apostrophes (U+2019 = '') vs regular apostrophes (') in msgid —
+// some plugin source strings use curly/smart quotes which look the same visually but differ in bytes.
+function patchPoFile(langCode, dict) {
+  const files = fs.readdirSync(langDir).filter(f =>
+    f.endsWith('-' + langCode + '.po') || f === langCode + '.po'
+  );
+  if (files.length === 0) { console.log('Not found for: ' + langCode); return; }
+  files.forEach(fname => {
+    const file = path.join(langDir, fname);
+    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    let changed = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('msgstr ') && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1] !== 'msgid ""') {
+        // Unescape the msgid for dictionary lookup
+        // Handles: escaped double-quotes (\"), escaped backslashes (\\),
+        // AND both regular apostrophes (') and smart/curly apostrophes (U+2019 ')
+        const msgid = lines[i-1].replace(/^msgid "/, '').replace(/"$/, '')
+          .replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+        // Patch if: msgstr is empty OR msgstr equals msgid (not actually translated)
+        const isUntranslated = lines[i] === 'msgstr ""' || lines[i] === lines[i-1].replace(/^msgid /, 'msgstr ');
+        if (isUntranslated && dict[msgid]) {
+          const t = dict[msgid].replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'\\n');
+          lines[i] = 'msgstr "' + t + '"';
+          changed++;
+        }
+      }
+    }
+    fs.writeFileSync(file, lines.join('\n'), 'utf8');
+    console.log(fname + ': ' + changed + ' strings patched');
+  });
+}
+
+Object.keys(translations).forEach(lang => patchPoFile(lang, translations[lang]));
+console.log('Done!');
+```
+
+**Step 3:** Write the translations dictionaries. For each language code that has empty strings:
+- Read the empty msgid list from Step 1
+- Translate ALL of them using your built-in language knowledge
+- Add them to the `translations` object in the script
+
+**Translations rules:**
+- Keep `%s`, `%d`, `%1$s`, `%2$d` and all PHP format specifiers **exactly as-is**
+- Keep HTML tags exactly as-is
+- Do NOT include entries with empty values — only include strings you have translated
+- For msgids with `\"` escaped quotes, the script handles unescaping automatically
+- **NEVER put the same English string as the translation** — if you don't know a translation, omit the entry entirely (leave it out of the dictionary). An empty `msgstr ""` is better than `msgstr "Settings"` for a German file.
+- After running the script, re-run `extract_untranslated.js` to verify no real text remains untranslated. Strings like URLs, emojis, brand names, and short tokens with `msgstr == msgid` are **intentionally identical** and are NOT a problem — do not attempt to "translate" them.
+
+**Smart-quote apostrophe gotcha (Windows/Mac):** Some plugin source files use curly/smart apostrophes (U+2019 `'`) instead of regular apostrophes (`'`). They look identical visually but have different byte values. If a string like `We'll handle hosting` isn't matching your dictionary key, check the actual character code:
+```bash
+node -e "var fs=require('fs');var c=fs.readFileSync('<PO_FILE>','utf8');var idx=c.indexOf('ll handle');console.log('char code:',c.charCodeAt(idx-1),'(39=normal, 8217=smart)');"
+```
+If char code is 8217, the file uses smart quotes. Either use the smart quote in your dictionary key (`We\u2019ll handle hosting`) or do a direct string replacement using `content.replace()` instead of the dictionary approach.
+
+**Loco Translate % ceiling — what to expect:** Loco counts `msgstr == msgid` as "pending" regardless of whether the identical value is correct (brand names, URLs, emojis). This creates a hard ceiling below 100%:
+- Languages with non-Latin scripts (Arabic, Bengali, Hindi, Japanese, Chinese, Korean, Russian, etc.) can reach 97%+ because Gutenberg block keywords and numbers can be transliterated/converted to native script
+- Latin-script languages (French, German, Spanish, Dutch, etc.) typically plateau at 92–95% because brand names (`WPPOOL`, `Jitsi Meet`, `FlexMeeting`), emojis, and URLs cannot be made different
+- This is correct and expected — do not try to "fix" brand names just to raise the percentage
+
+**Step 4:** Run the script:
+```bash
+node patch_translations.js
+```
+
+**Step 5:** Verify all files are fully translated:
+```bash
+node -e "
+const fs=require('fs'), path=require('path');
+const dir='<PLUGIN_PATH>/languages';
+fs.readdirSync(dir).filter(f=>f.endsWith('.po')).forEach(f=>{
+  const content=fs.readFileSync(path.join(dir,f),'utf8');
+  const lines=content.split('\n');
+  let empty=0;
+  for(let i=0;i<lines.length;i++){
+    if(lines[i]==='msgstr \"\"' && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1]!='msgid \"\"') empty++;
+  }
+  console.log(f+': '+empty+' empty msgstr '+(empty===0?'(done!)':'(needs translation)'));
+});
+"
+```
+
+If any file still has empty strings, add the missing entries to the patch script and re-run.
+
+### For under 10 empty strings (small updates only):
+
+Only use Edit tool per string when there are fewer than 10 empty msgstr entries across ALL files. In that case:
+
+Read the `.po` file, find blocks like:
 ```
 #: includes/settings.php:142
 msgid "New setting label"
 msgstr ""
 ```
-
-Replace with the translation using the Edit tool:
+Replace with the translation using Edit tool:
 ```
 #: includes/settings.php:142
 msgid "New setting label"
 msgstr "Nouveau libellé de paramètre"
 ```
 
-### Rules for UPDATE MODE translation:
-- **Only translate entries with `msgstr ""`** — skip all entries that already have a translation
-- **Never overwrite existing translations** — even if you think yours is better
-- Keep all format specifiers (`%s`, `%d`, `%1$s`) exactly as-is
-- Keep HTML tags exactly as-is
-- For plural forms: only fill `msgstr[0]` and `msgstr[1]` if both are empty `""`
-
-### Batch empty-string editing:
-If there are many new strings, use chunked Edits — target 2-3 empty entries at a time as `old_string` and fill them all in `new_string`. This is faster than one Edit per string.
-
-After translating all empty strings in a `.po` file, verify:
-```bash
-node -e "
-const fs=require('fs');
-const content=fs.readFileSync('<PO_FILE>','utf8');
-const emptyCount=(content.match(/\nmsgstr \"\"\n/g)||[]).length;
-console.log('Remaining empty msgstr:', emptyCount, emptyCount===0?'(done!)':'(still needs translation)');
-"
-```
-
-Repeat for each `.po` file that had new strings added.
+After translating, verify using the bash check above.
 
 ---
 
@@ -382,6 +567,8 @@ add_action( 'init', function() {
 - Use Write tool for chunk 1, Edit tool for all subsequent chunks
 - If output is cut short mid-chunk, continue with the next Edit immediately
 - Chunk size: 200 strings max per call if you have output limits
+- **UPDATE MODE**: Always use the `patch_translations.js` Node.js script approach (STEP 3B) — never use custom one-off scripts or external APIs. The patch script approach handles all languages in one run and is reliable.
+- **NEVER write custom translation scripts that differ from the patch_translations.js format** — they have proven to fail with special characters, escaping issues, and missing strings
 
 ### Claude (Claude Code / Cursor / API)
 - Use Write tool for chunk 1, Edit tool for appending
