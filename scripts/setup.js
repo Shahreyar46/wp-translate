@@ -107,18 +107,8 @@ if (doInstall) {
     }
   }
 
-  // Ask about optional deps
-  console.log('\nInstalling recommended provider: deepl-node');
-  if (!isInstalled('deepl-node')) {
-    installPkg('deepl-node');
-  } else {
-    console.log('✓ deepl-node (already installed)');
-  }
-
-  console.log('\nTo install other providers, run:');
-  console.log('  npm install --prefix "' + skillDir + '" @google-cloud/translate');
-  console.log('  npm install --prefix "' + skillDir + '" openai');
-  console.log('  npm install --prefix "' + skillDir + '" @anthropic-ai/sdk');
+  // translator.js is retired — no translation API deps needed
+  // The AI translates directly using built-in knowledge (no API key required)
 
   console.log('\nSetup complete!');
   process.exit(0);

@@ -21,17 +21,33 @@ const domain    = args['--domain'];
 // ─── Load gettext-parser ──────────────────────────────────────────────────────
 
 function loadGettextParser() {
+  const skillDir = path.dirname(__dirname);
   const candidates = [
     () => require('gettext-parser'),
-    () => require(path.join(path.dirname(__dirname), 'node_modules', 'gettext-parser')),
+    () => require(path.join(skillDir, 'node_modules', 'gettext-parser')),
+    () => require(path.join(skillDir, 'node_modules', 'gettext-parser', 'index.js')),
+    () => { process.chdir(skillDir); return require('gettext-parser'); },
   ];
 
   for (const fn of candidates) {
     try { return fn(); } catch {}
   }
 
-  console.error('Missing dependency: gettext-parser');
-  console.error(`Run: node "${path.join(path.dirname(__dirname), 'scripts', 'setup.js')}" --install`);
+  // Auto-install as last resort
+  console.log('gettext-parser not found — attempting auto-install...');
+  const { spawnSync } = require('child_process');
+  const result = spawnSync('npm', ['install', '--prefix', skillDir, 'gettext-parser', '--save'], {
+    stdio: 'inherit',
+    shell: true,
+  });
+  if (result.status === 0) {
+    try { return require(path.join(skillDir, 'node_modules', 'gettext-parser')); } catch {}
+  }
+
+  console.error('\nERROR: Missing dependency: gettext-parser');
+  console.error(`Fix: Run this command manually:`);
+  console.error(`  npm install --prefix "${skillDir}" gettext-parser`);
+  console.error(`Then retry.`);
   process.exit(1);
 }
 

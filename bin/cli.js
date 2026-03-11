@@ -129,19 +129,16 @@ if (langList.length === 0 && !compileOnly) {
 }
 
 if (!compileOnly && langList.length > 0) {
-  console.log(`\n[2/3] Translating ${langList.length} language(s) using ${provider}...`);
-  for (const lang of langList) {
-    console.log(`\n  → ${lang}`);
-    const poFile = path.join(langDir, `${textDomain}-${lang}.po`);
-    const transArgs = [
-      '--pot', potFile,
-      '--lang', lang,
-      '--provider', provider,
-      '--output', poFile,
-    ];
-    if (apiKey) transArgs.push('--api-key', apiKey);
-    run('translator.js', transArgs);
-  }
+  // translator.js is retired — the AI translates directly using built-in knowledge.
+  // When invoked via the wp-translate skill, the AI (Claude/GPT/Gemini/etc.) reads
+  // the POT file and writes the .po files directly. No external API needed.
+  console.log(`\n[2/3] Translation step:`);
+  console.log(`  The AI will translate all strings and write .po files directly.`);
+  console.log(`  Languages: ${langList.join(', ')}`);
+  console.log(`  POT source: ${potFile}`);
+  console.log(`  Output dir: ${langDir}`);
+  console.log(`\n  If running via wp-translate skill: the AI handles this step.`);
+  console.log(`  If running manually: write .po files to ${langDir}/ then run --compile-only.`);
 }
 
 // ── Step 3: Compile ───────────────────────────────────────────────────────────

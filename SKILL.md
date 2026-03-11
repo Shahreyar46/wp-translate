@@ -95,18 +95,40 @@ Report: PHP strings found, JS strings found, total unique strings.
 
 For each language, YOU (the AI currently running) translate ALL strings and write the `.po` file using the Write tool.
 
-### How to build the PO file:
+### Translation rules:
+- Keep `%s`, `%d`, `%1$s`, `%2$d` and all PHP format specifiers **exactly as-is**
+- Keep HTML tags exactly as-is (e.g. `<a href="%s">`, `<strong>`, `<br/>`)
+- Keep WordPress shortcodes as-is
+- Translate only the human-readable text
+- Use natural, idiomatic phrasing for the target language — not word-for-word
+- For UI strings: use the standard vocabulary of that language's software ecosystem
 
-1. Read the POT file to get all `msgid` entries with their file references
-2. Translate each `msgid` into the target language using your own knowledge
-3. Translation rules:
-   - Keep `%s`, `%d`, `%1$s`, `%2$d` and all PHP format specifiers **exactly as-is**
-   - Keep HTML tags exactly as-is (e.g. `<a href="%s">`, `<strong>`, `<br/>`)
-   - Keep WordPress shortcodes as-is
-   - Translate only the human-readable text
-   - Use natural, idiomatic phrasing for the target language — not word-for-word
-   - For UI strings: use the standard vocabulary of that language's software ecosystem
-4. Write the complete `.po` file in one Write tool call to `<PLUGIN_PATH>/languages/<TEXT_DOMAIN>-<LANG_CODE>.po`
+### Strategy based on string count:
+
+#### Under 400 strings → Write in ONE call
+Read the POT, translate everything, write the complete `.po` file in a single Write tool call.
+
+#### 400–800 strings → Write in TWO calls
+1. **First call (Write):** Write the PO header + strings 1 to ~400
+2. **Second call (Edit/append):** Append remaining strings to the file using Edit
+
+#### Over 800 strings → Write in CHUNKS of ~300 strings
+1. **Chunk 1 (Write):** Write PO header + first 300 translations
+2. **Chunk 2 (Edit append):** Append next 300 translations
+3. **Chunk N (Edit append):** Continue until ALL strings are written
+4. After final chunk, verify total count matches POT string count
+
+**IMPORTANT:** Use the Bash tool to append chunks:
+```bash
+cat >> "<PLUGIN_PATH>/languages/<TEXT_DOMAIN>-<LANG_CODE>.po" << 'APPEND_EOF'
+#: path/to/file.php:123
+msgid "Example String"
+msgstr "অনুবাদিত স্ট্রিং"
+
+APPEND_EOF
+```
+
+Or use the Edit tool to append by targeting the last line of the existing file.
 
 ### PO file format:
 
@@ -148,7 +170,7 @@ msgstr "<translated text>"
 | `he_IL` | `nplurals=4; plural=(n==1)?0:(n==2)?1:(n<0||n>10)&&(n%10==0)?2:3` |
 | `hi_IN`, `ur`, `fa_IR` | `nplurals=2; plural=(n != 1)` |
 
-**Process ALL strings. Do not skip any. Write the complete file in one Write tool call.**
+**Process ALL strings. Do not skip any. Use chunked writing for large files.**
 
 ---
 
@@ -199,10 +221,12 @@ add_action( 'init', function() {
 2. **NEVER call translator.js** — that script is retired
 3. **Never stop mid-pipeline** to ask "should I continue?"
 4. **Translate ALL strings** — do not skip, truncate, or say "too many strings"
-5. **Write the complete .po file** in one Write tool call per language
-6. **Always compile .mo** after writing each .po
-7. If plugin has 500+ strings, still translate them all — your context window is large enough
-8. Do all languages sequentially without pausing between them
+5. **For large files (800+ strings): use chunked writing** — Write first chunk, then append remaining chunks with Edit or Bash cat >>
+6. **Always compile .mo** after all chunks are written for a language
+7. **Never say "too many strings" or "file too large"** — use chunked strategy instead
+8. If a Write tool call would exceed output limits, split into smaller chunks and append
+9. Do all languages sequentially without pausing between them
+10. After writing all chunks, verify the string count: `grep -c "^msgid " <file.po>` should match POT count
 
 ---
 
