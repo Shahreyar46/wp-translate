@@ -11,6 +11,7 @@ Scan your WordPress plugin for all translatable strings and generate production-
 - [How It Works](#how-it-works)
 - [No API Key Needed](#no-api-key-needed)
 - [Quick Start](#quick-start)
+- [Updating Existing Translations](#updating-existing-translations-new-strings)
 - [Installation](#installation)
 - [Usage](#usage)
   - [Claude Code](#claude-code-slash-command)
@@ -96,6 +97,107 @@ node scripts/translator.js --pot ./my-plugin/languages/my-plugin.pot --lang fr_F
 # 3. Compile → MO
 node scripts/compiler.js --dir ./my-plugin/languages --domain my-plugin
 ```
+
+---
+
+## Updating Existing Translations (New Strings)
+
+When you **add new strings** to your plugin code after you've already translated it, you don't need to re-translate everything from scratch. The skill automatically detects existing `.po` files and runs in **update mode** — preserving all existing translations and only translating the new ones.
+
+### How it works automatically
+
+Just run `/wp-translate` again on the same plugin. The skill will:
+
+1. **Detect** that `.po` files already exist → switch to **update mode**
+2. **Re-scan** your plugin code → generate a fresh `.pot` with all current strings
+3. **Merge** the new `.pot` into each existing `.po` file using `merger.js`:
+   - ✅ All existing `msgstr` translations are kept **untouched**
+   - ✅ New strings are added with **empty `msgstr`** (ready to translate)
+   - ✅ Strings removed from code are **dropped** from the `.po`
+   - ✅ File references (`#:`) are **updated** to current line numbers
+4. **Translate only the new/empty strings** — not the whole file
+5. **Recompile** all `.po` → `.mo`
+
+### Claude Code (automatic)
+
+```
+/wp-translate ./wp-content/plugins/my-plugin
+```
+
+Claude detects update mode, merges, translates only new strings. Done.
+
+### Cursor / Copilot / any AI (natural language)
+
+```
+I added some new strings to my plugin. Update my existing translations without
+losing any existing work. Plugin is at ./wp-content/plugins/my-plugin
+```
+
+### Standalone CLI (no AI)
+
+```bash
+# Step 1: Re-scan plugin → fresh .pot
+node scripts/scanner.js --plugin ./my-plugin --domain my-plugin
+
+# Step 2: Merge new .pot into all existing .po files (preserves existing translations)
+node scripts/merger.js \
+  --pot ./my-plugin/languages/my-plugin.pot \
+  --dir ./my-plugin/languages \
+  --domain my-plugin \
+  --obsolete remove
+
+# The merger prints a JSON report showing exactly which strings were added per .po file.
+# Now manually translate the new empty strings in each .po file, then:
+
+# Step 3: Recompile .mo files
+node scripts/compiler.js --dir ./my-plugin/languages --domain my-plugin
+```
+
+### merger.js options
+
+| Option | Values | Default | Description |
+|---|---|---|---|
+| `--pot` | path | required | The new `.pot` file to merge from |
+| `--po` | path | — | Merge into a single `.po` file |
+| `--dir` | path | — | Merge into all `.po` files in a directory |
+| `--domain` | string | — | Only process files starting with this domain |
+| `--obsolete` | `remove` / `comment` / `keep` | `remove` | What to do with strings no longer in code |
+
+**`--obsolete` modes:**
+- `remove` — deleted from `.po` entirely (recommended — keeps files clean)
+- `comment` — prefixed with `#~` (standard gettext obsolete marker — recoverable)
+- `keep` — kept as normal entries (not recommended)
+
+### What the merger report looks like
+
+After running `merger.js`, the JSON output tells you exactly what changed:
+
+```json
+{
+  "pot_strings": 85,
+  "files_merged": 3,
+  "total_added": 4,
+  "total_removed": 1,
+  "results": [
+    {
+      "file": "my-plugin-fr_FR.po",
+      "added": 4,
+      "removed": 1,
+      "updatedRefs": 2,
+      "addedStrings": ["New setting label", "Reset button", "Save changes", "Cancel"]
+    },
+    {
+      "file": "my-plugin-de_DE.po",
+      "added": 4,
+      "removed": 1,
+      "updatedRefs": 2,
+      "addedStrings": ["New setting label", "Reset button", "Save changes", "Cancel"]
+    }
+  ]
+}
+```
+
+`total_added: 0` means all `.po` files are already up to date — only recompile `.mo`.
 
 ---
 
@@ -517,10 +619,10 @@ A: Yes — run it once per plugin, pointing to each plugin's folder.
 A: It's left blank and the rest continue. You can fill it in manually in the `.po` file.
 
 **Q: Do I need to re-run when I add new strings?**
-A: Yes — re-run `scanner.js` to regenerate the `.pot`, then translate again.
+A: Yes — just run `/wp-translate` again (or run `scanner.js` + `merger.js` manually). The skill automatically detects existing `.po` files and runs in update mode — only the new strings are translated. Existing translations are preserved.
 
 **Q: Will it overwrite my existing translations?**
-A: Yes — it regenerates from scratch. Back up your `languages/` folder if you have manual translations.
+A: No — when `.po` files already exist, the skill runs in **update mode**. It merges the new `.pot` into your existing `.po` files using `merger.js`, keeping all existing `msgstr` values untouched and only adding empty entries for new strings.
 
 **Q: Does it handle RTL languages (Arabic, Hebrew, Urdu, Farsi)?**
 A: Yes — the translated text is correct. WordPress handles RTL direction automatically via the locale setting.

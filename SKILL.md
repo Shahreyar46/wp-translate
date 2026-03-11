@@ -64,6 +64,31 @@ These rules apply whether you are **Claude, Gemini, GPT-4, Copilot, Mistral, Lla
 
 ---
 
+## STEP 0B — Detect Mode: Fresh Translation vs. Update
+
+**Before doing anything else**, check whether existing `.po` files already exist for this plugin:
+
+```bash
+node -e "
+const fs=require('fs'), path=require('path');
+const langDir='<PLUGIN_PATH>/languages';
+if(!fs.existsSync(langDir)){console.log('MODE=fresh'); process.exit();}
+const pos=fs.readdirSync(langDir).filter(f=>f.endsWith('.po'));
+console.log(pos.length>0 ? 'MODE=update' : 'MODE=fresh');
+console.log('EXISTING_PO='+pos.join(','));
+"
+```
+
+### If MODE=fresh → run the normal pipeline (STEP 1 → 2 → 3 → 4 → 5)
+All languages are translated from scratch. Continue to STEP 1.
+
+### If MODE=update → run the UPDATE pipeline instead (STEP 1 → 2 → 2B → 3B → 4 → 5)
+Existing translations are preserved. Only new strings are translated. See STEP 2B and STEP 3B below.
+
+**Announce to the user which mode was detected before proceeding.**
+
+---
+
 ## STEP 1 — Install Scanner/Compiler Dependencies
 
 ```bash
@@ -94,7 +119,91 @@ Then read the POT file to see all strings. For large POT files (1000+ lines), re
 
 **Report:** PHP strings found, JS strings found, total unique strings.
 
-> After reading, immediately proceed to STEP 3. Do NOT re-read the POT file again.
+> After reading, immediately proceed to STEP 3 (fresh) or STEP 2B (update). Do NOT re-read the POT file again.
+
+---
+
+## STEP 2B — (UPDATE MODE ONLY) Merge New POT into Existing PO Files
+
+Run merger.js to merge the freshly generated POT into all existing `.po` files:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/merger.js" \
+  --pot "<PLUGIN_PATH>/languages/<TEXT_DOMAIN>.pot" \
+  --dir "<PLUGIN_PATH>/languages" \
+  --domain "<TEXT_DOMAIN>" \
+  --obsolete remove
+```
+
+The merger will:
+- **Keep** all existing translated `msgstr` values untouched
+- **Add** new msgids (with empty `msgstr ""`) for strings not yet in the `.po`
+- **Remove** msgids that no longer exist in the plugin code
+- **Update** file references (`#:`) to reflect current line numbers
+
+Read the JSON output from merger.js. It will tell you exactly which strings were added per `.po` file. Example output:
+```json
+{
+  "pot_strings": 85,
+  "files_merged": 3,
+  "total_added": 4,
+  "results": [
+    { "file": "fr_FR.po", "added": 4, "removed": 1, "addedStrings": ["New setting label", "Reset button", ...] }
+  ]
+}
+```
+
+**If `total_added === 0`** — all `.po` files are already up to date. Skip STEP 3B. Go directly to STEP 4 to recompile `.mo` files (references may have changed).
+
+**If `total_added > 0`** — proceed to STEP 3B to translate only the new strings.
+
+---
+
+## STEP 3B — (UPDATE MODE ONLY) Translate Only New/Empty Strings
+
+For each `.po` file that has new strings (added > 0):
+
+1. **Read the `.po` file** to see which `msgstr ""` entries are empty
+2. **Translate ONLY those empty entries** — do NOT touch existing non-empty `msgstr` values
+3. **Use Edit tool** to replace each empty `msgstr ""` with the correct translation
+
+### How to find and fill empty strings:
+
+Read the updated `.po` file. Look for blocks where `msgstr ""` is empty:
+```
+#: includes/settings.php:142
+msgid "New setting label"
+msgstr ""
+```
+
+Replace with the translation using the Edit tool:
+```
+#: includes/settings.php:142
+msgid "New setting label"
+msgstr "Nouveau libellé de paramètre"
+```
+
+### Rules for UPDATE MODE translation:
+- **Only translate entries with `msgstr ""`** — skip all entries that already have a translation
+- **Never overwrite existing translations** — even if you think yours is better
+- Keep all format specifiers (`%s`, `%d`, `%1$s`) exactly as-is
+- Keep HTML tags exactly as-is
+- For plural forms: only fill `msgstr[0]` and `msgstr[1]` if both are empty `""`
+
+### Batch empty-string editing:
+If there are many new strings, use chunked Edits — target 2-3 empty entries at a time as `old_string` and fill them all in `new_string`. This is faster than one Edit per string.
+
+After translating all empty strings in a `.po` file, verify:
+```bash
+node -e "
+const fs=require('fs');
+const content=fs.readFileSync('<PO_FILE>','utf8');
+const emptyCount=(content.match(/\nmsgstr \"\"\n/g)||[]).length;
+console.log('Remaining empty msgstr:', emptyCount, emptyCount===0?'(done!)':'(still needs translation)');
+"
+```
+
+Repeat for each `.po` file that had new strings added.
 
 ---
 
@@ -217,8 +326,9 @@ This compiles all `.po` files in one pass. If `gettext-parser` is missing, the s
 
 ## STEP 5 — Show Results Summary
 
+**For FRESH mode:**
 ```
-✅  wp-translate Complete
+✅  wp-translate Complete (Fresh Translation)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Plugin:     <plugin-name>
 Domain:     <text-domain>
@@ -231,6 +341,26 @@ Language    │ .pot │ .po │ .mo │ Strings
 bn_BD       │  ✓   │  ✓  │  ✓  │  XX
 fr_FR       │  ✓   │  ✓  │  ✓  │  XX
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WordPress is now ready to serve translations!
+```
+
+**For UPDATE mode:**
+```
+✅  wp-translate Complete (Update — Existing Translations Preserved)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Plugin:     <plugin-name>
+Domain:     <text-domain>
+Total strings in POT:  XX
+New strings added:     XX  (translated by AI)
+Obsolete removed:      XX
+Existing preserved:    XX  (untouched)
+Output:     <PLUGIN_PATH>/languages/
+
+Language    │ .po │ .mo │ Total │ New │ Removed
+────────────┼─────┼─────┼───────┼─────┼────────
+bn_BD       │  ✓  │  ✓  │  XX   │  +X │   -X
+fr_FR       │  ✓  │  ✓  │  XX   │  +X │   -X
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WordPress is now ready to serve translations!
 ```
 
@@ -325,6 +455,7 @@ add_action( 'init', function() {
 All scripts at `${CLAUDE_SKILL_DIR}/scripts/`:
 - `setup.js` — installs gettext-parser + compiler deps (no translation APIs)
 - `scanner.js` — extracts PHP + JS translatable strings → `.pot`
+- `merger.js` — merges new `.pot` into existing `.po` files (UPDATE MODE — preserves existing translations, adds new empty strings, removes obsolete ones)
 - `extract-strings.js` — outputs msgid list as JSON for the AI to read
 - `compiler.js` — compiles `.po` → `.mo` binary (no msgfmt needed, auto-installs deps)
 
