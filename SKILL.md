@@ -8,44 +8,49 @@ argument-hint: plugin-path lang1,lang2,lang3
 
 You are an expert WordPress internationalization engineer AND a professional translator. When this skill is invoked, **execute the complete pipeline automatically** — do not stop to ask for confirmation at any step.
 
-## The Golden Rule
+---
 
-**YOU are the translator.** Whether the user is running Claude Code, Cursor, Copilot, ChatGPT, Gemini, Windsurf, or any other AI tool — YOU (the AI) read the strings and translate them directly using your built-in multilingual knowledge.
+## ⚠️ UNIVERSAL AI RULES — READ FIRST (applies to ALL AI models)
 
-- **NO API key required** — ever
-- **NO external translation service** — ever
-- **NO Node.js translator.js script** — that file is retired
-- You write the translated `.po` file directly using the Write tool
+These rules apply whether you are **Claude, Gemini, GPT-4, Copilot, Mistral, Llama, or any other AI**:
 
-This works identically in ALL AI environments:
-- Claude Code → Claude translates
-- Cursor (Claude/GPT/Gemini) → that AI translates
-- GitHub Copilot → Copilot translates
-- ChatGPT → ChatGPT translates
-- Any AI with file write access → it translates
+### RULE 1 — YOU translate. Never delegate.
+- **NEVER** call `generalist`, `subagent`, `agent`, `delegate`, `assistant`, or any tool that spawns another AI
+- **NEVER** call `translator.js` — it is retired and deleted from the workflow
+- **NEVER** call an external translation API (DeepL, Google Translate, Azure, etc.)
+- **YOU** (the AI reading this) use your built-in language knowledge to translate every string
+
+### RULE 2 — No looping without writing
+- Read the POT file **once** (in sections if large), then immediately translate and write
+- If you catch yourself reading the POT file 3+ times without writing any `.po` content — **STOP and write now**
+- Do not re-read sections you already translated
+
+### RULE 3 — Write files using tools, not bash echo/cat
+- Use the **Write tool** to create the `.po` file (chunk 1 = header + first ~300 strings)
+- Use the **Edit tool** to append subsequent chunks by targeting the last few lines as `old_string`
+- On Windows: do NOT use `cat >> file << 'EOF'` heredoc — it breaks
+- Safe alternative for appending via shell: `node -e "require('fs').appendFileSync('FILE', 'CONTENT', 'utf8')"`
+
+### RULE 4 — Chunked writing for large files
+- **Under 400 strings** → Write everything in ONE Write call
+- **400–800 strings** → Write call (header + first 400), then ONE Edit append (rest)
+- **Over 800 strings** → Write call (header + first 300), then Edit appends of ~250 strings each
+- **Never say "too many strings"** — always use chunking
+
+### RULE 5 — No confirmation prompts
+- Never ask "should I continue?", "are you ready?", or "shall I translate the next batch?"
+- Run all chunks back-to-back without stopping
 
 ---
 
-## Trigger Phrases
+## STEP 0 — Resolve Parameters
 
-- "translate my plugin to French/Bangla/Arabic/..."
-- "generate translations for fr_FR, de_DE, es_ES"
-- "make .pot .po .mo files for my plugin"
-- "run i18n on my plugin"
-- "localize my plugin"
-- "/wp-translate"
-- "translate all strings to [any language]"
-
----
-
-## STEP 0 — Resolve Parameters (gather everything first, then run)
-
-1. **Plugin path** — from arguments, currently open file context, or ask once
+1. **Plugin path** — from arguments, currently open file, or ask once
 2. **Text domain** — auto-detect:
    ```bash
-   grep -r "Text Domain:" "<PLUGIN_PATH>" --include="*.php" -m 1
+   node -e "const fs=require('fs'),path=require('path');const d='<PLUGIN_PATH>';const f=fs.readdirSync(d).find(f=>f.endsWith('.php'));if(f){const m=fs.readFileSync(path.join(d,f),'utf8').match(/Text Domain:\s*(.+)/i);console.log(m?m[1].trim():'not found');}else console.log('no php file');"
    ```
-3. **Languages** — from arguments or natural language. Map:
+3. **Languages** — from arguments or natural language:
    - "French" → `fr_FR`, "German" → `de_DE`, "Spanish" → `es_ES`
    - "Arabic" → `ar`, "Italian" → `it_IT`, "Portuguese" → `pt_BR`
    - "Chinese" → `zh_CN`, "Japanese" → `ja`, "Russian" → `ru_RU`
@@ -59,7 +64,7 @@ This works identically in ALL AI environments:
 
 ---
 
-## STEP 1 — Install Scanner/Compiler Dependencies (Node.js only — no translation libs)
+## STEP 1 — Install Scanner/Compiler Dependencies
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/setup.js" --check
@@ -69,7 +74,7 @@ If check fails:
 node "${CLAUDE_SKILL_DIR}/scripts/setup.js" --install
 ```
 
-These are only needed for scanning (gettext-parser) and compiling PO→MO. No translation API libs are installed or needed.
+Only installs `gettext-parser` for scanning/compiling. No translation API libs needed.
 
 ---
 
@@ -82,55 +87,79 @@ node "${CLAUDE_SKILL_DIR}/scripts/scanner.js" \
   --output "<PLUGIN_PATH>/languages/<TEXT_DOMAIN>.pot"
 ```
 
-Then extract all strings as JSON so you can see them clearly:
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/extract-strings.js" "<PLUGIN_PATH>/languages/<TEXT_DOMAIN>.pot"
-```
+Then read the POT file to see all strings. For large POT files (1000+ lines), read in sections:
+- Read lines 1–500 first, note all `msgid` values
+- Read lines 500–1000, note remaining `msgid` values
+- Continue until you have seen ALL strings
 
-Report: PHP strings found, JS strings found, total unique strings.
+**Report:** PHP strings found, JS strings found, total unique strings.
+
+> After reading, immediately proceed to STEP 3. Do NOT re-read the POT file again.
 
 ---
 
 ## STEP 3 — YOU Translate → Write PO File Directly
 
-For each language, YOU (the AI currently running) translate ALL strings and write the `.po` file using the Write tool.
+For each language, translate ALL strings using your built-in knowledge and write the `.po` file.
 
 ### Translation rules:
 - Keep `%s`, `%d`, `%1$s`, `%2$d` and all PHP format specifiers **exactly as-is**
-- Keep HTML tags exactly as-is (e.g. `<a href="%s">`, `<strong>`, `<br/>`)
+- Keep HTML tags exactly as-is (`<a href="%s">`, `<strong>`, `<br/>`)
 - Keep WordPress shortcodes as-is
 - Translate only the human-readable text
-- Use natural, idiomatic phrasing for the target language — not word-for-word
-- For UI strings: use the standard vocabulary of that language's software ecosystem
+- Use natural, idiomatic phrasing — not word-for-word
+- Use standard software UI vocabulary for the target language
 
-### Strategy based on string count:
+### How to write the PO file — step by step:
 
-#### Under 400 strings → Write in ONE call
-Read the POT, translate everything, write the complete `.po` file in a single Write tool call.
+**Step A:** Write chunk 1 using the Write tool:
+```
+# Translation of <DOMAIN> for: <LANG_CODE>
+# Generated by wp-translate skill
+msgid ""
+msgstr ""
+"PO-Revision-Date: <DATE>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: <LANG_CODE>\n"
+"Plural-Forms: <PLURAL_FORM>\n"
+"X-Generator: wp-translate-skill\n"
 
-#### 400–800 strings → Write in TWO calls
-1. **First call (Write):** Write the PO header + strings 1 to ~400
-2. **Second call (Edit/append):** Append remaining strings to the file using Edit
+#: path/to/file.php:42
+msgid "Settings"
+msgstr "<translated>"
 
-#### Over 800 strings → Write in CHUNKS of ~300 strings
-1. **Chunk 1 (Write):** Write PO header + first 300 translations
-2. **Chunk 2 (Edit append):** Append next 300 translations
-3. **Chunk N (Edit append):** Continue until ALL strings are written
-4. After final chunk, verify total count matches POT string count
-
-**IMPORTANT:** Use the Bash tool to append chunks:
-```bash
-cat >> "<PLUGIN_PATH>/languages/<TEXT_DOMAIN>-<LANG_CODE>.po" << 'APPEND_EOF'
-#: path/to/file.php:123
-msgid "Example String"
-msgstr "অনুবাদিত স্ট্রিং"
-
-APPEND_EOF
+... (first ~300 strings)
 ```
 
-Or use the Edit tool to append by targeting the last line of the existing file.
+**Step B:** Append chunk 2 using Edit tool — target the LAST 2 lines of the file as `old_string`, add them back + new content as `new_string`. Example:
 
-### PO file format:
+old_string:
+```
+msgid "Last string in chunk 1"
+msgstr "অনুবাদ"
+```
+new_string:
+```
+msgid "Last string in chunk 1"
+msgstr "অনুবাদ"
+
+#: path/to/file.php:123
+msgid "Next string"
+msgstr "পরবর্তী অনুবাদ"
+
+... (next ~250 strings)
+```
+
+**Step C:** Repeat Step B for each remaining chunk until ALL strings are written.
+
+**Step D:** Verify count:
+```bash
+node -e "const fs=require('fs');const lines=fs.readFileSync('<PO_FILE>','utf8').split('\n');const count=lines.filter(l=>l.startsWith('msgid ') && l!='msgid \"\"').length;console.log('Translated strings:',count);"
+```
+
+### PO file format reference:
 
 ```
 # Translation of <domain> for: <LANG_CODE>
@@ -150,8 +179,10 @@ msgid "Settings"
 msgstr "<translated text>"
 
 #: path/to/file.php:43
-msgid "Save Changes"
-msgstr "<translated text>"
+msgid "%d item"
+msgid_plural "%d items"
+msgstr[0] "<singular translation>"
+msgstr[1] "<plural translation>"
 ```
 
 ### Plural forms by language:
@@ -170,8 +201,6 @@ msgstr "<translated text>"
 | `he_IL` | `nplurals=4; plural=(n==1)?0:(n==2)?1:(n<0||n>10)&&(n%10==0)?2:3` |
 | `hi_IN`, `ur`, `fa_IR` | `nplurals=2; plural=(n != 1)` |
 
-**Process ALL strings. Do not skip any. Use chunked writing for large files.**
-
 ---
 
 ## STEP 4 — Compile PO → MO
@@ -182,7 +211,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/compiler.js" \
   --domain "<TEXT_DOMAIN>"
 ```
 
-This compiles all `.po` files in one pass.
+This compiles all `.po` files in one pass. If `gettext-parser` is missing, the script auto-installs it.
 
 ---
 
@@ -215,18 +244,54 @@ add_action( 'init', function() {
 
 ---
 
-## Execution Rules
+## AI-Specific Behavior Notes
+
+### Gemini (antigravity / Cursor / AI Studio)
+- The `generalist` tool is NOT available — do not call it
+- Do NOT spawn subagents — translate directly
+- Use Write tool for chunk 1, Edit tool for all subsequent chunks
+- If output is cut short mid-chunk, continue with the next Edit immediately
+- Chunk size: 200 strings max per call if you have output limits
+
+### Claude (Claude Code / Cursor / API)
+- Use Write tool for chunk 1, Edit tool for appending
+- Agent tool is available but do NOT use it for translation — translate directly
+- Chunk size: 300–400 strings per call
+
+### GPT-4 / ChatGPT (Cursor / API / Copilot)
+- Do not use function_call to delegate to external tools
+- Write file contents directly using the file write capability
+- If context window is limited, process 150–200 strings per chunk
+
+### Copilot (VSCode)
+- Use the built-in file edit commands to write `.po` content
+- Do not open browser or call external services
+- Chunk size: 200 strings per call
+
+### Windsurf / Codeium
+- Use the built-in write/edit file tools
+- Do not spawn terminal processes for translation
+- Chunk size: 200–300 strings per call
+
+### Any other AI
+- Use whatever file-write tool you have available (Write, EditFile, create_file, etc.)
+- Never call an external translation API — use your built-in multilingual knowledge
+- Translate in chunks if needed — never give up due to "too many strings"
+
+---
+
+## Execution Rules (Universal)
 
 1. **NEVER ask for an API key** — the AI is the translator
 2. **NEVER call translator.js** — that script is retired
-3. **Never stop mid-pipeline** to ask "should I continue?"
-4. **Translate ALL strings** — do not skip, truncate, or say "too many strings"
-5. **For large files (800+ strings): use chunked writing** — Write first chunk, then append remaining chunks with Edit or Bash cat >>
-6. **Always compile .mo** after all chunks are written for a language
-7. **Never say "too many strings" or "file too large"** — use chunked strategy instead
-8. If a Write tool call would exceed output limits, split into smaller chunks and append
-9. Do all languages sequentially without pausing between them
-10. After writing all chunks, verify the string count: `grep -c "^msgid " <file.po>` should match POT count
+3. **NEVER delegate** to a sub-agent, generalist, or external tool
+4. **NEVER stop mid-pipeline** to ask "should I continue?"
+5. **NEVER say "too many strings"** — use chunked writing instead
+6. **Translate ALL strings** — do not skip any
+7. **Always compile .mo** after writing all `.po` chunks
+8. **Verify string count** after writing — count should match POT total
+9. **Do all languages sequentially** without pausing between them
+10. **On Windows** — do not use `cat >> file << 'EOF'` — use Edit tool or Node.js append
 
 ---
 
@@ -261,7 +326,7 @@ All scripts at `${CLAUDE_SKILL_DIR}/scripts/`:
 - `setup.js` — installs gettext-parser + compiler deps (no translation APIs)
 - `scanner.js` — extracts PHP + JS translatable strings → `.pot`
 - `extract-strings.js` — outputs msgid list as JSON for the AI to read
-- `compiler.js` — compiles `.po` → `.mo` binary (no msgfmt needed)
+- `compiler.js` — compiles `.po` → `.mo` binary (no msgfmt needed, auto-installs deps)
 
 `translator.js` — retired. The AI translates directly.
 
