@@ -42,6 +42,12 @@ These rules apply whether you are **Claude, Gemini, GPT-4, Copilot, Mistral, Lla
 - Never ask "should I continue?", "are you ready?", or "shall I translate the next batch?"
 - Run all chunks back-to-back without stopping
 
+### RULE 6 — Prevent Duplicate msgid (CRITICAL)
+- **NEVER** add a `msgid` to the end of a `.po` file if it already exists elsewhere in the same file.
+- Before adding/patching a string, always check if the `msgid` is already present.
+- If it exists, update the existing `msgstr` value instead of adding a new entry.
+- Duplicate `msgid` entries cause `.po` compilation to fail entirely.
+
 ---
 
 ## STEP 0 — Resolve Parameters
@@ -390,6 +396,12 @@ For each language, translate ALL strings using your built-in knowledge and write
 - Use natural, idiomatic phrasing — not word-for-word
 - Use standard software UI vocabulary for the target language
 
+### Rule on Brand Names & Branding:
+- **Do NOT** blindly leave brand names in English in every language.
+- For languages with non-Latin scripts (Arabic, Bengali, Hindi, Russian, Japanese, etc.), **transliterate** the brand name phonetically into the native script (e.g., "FlexMeeting Ultimate" → "ফ্লেক্স মিটিং আলটিমেট", "Jitsi Meet" → "জিতসি মিট", "WPPOOL" → "ডব্লিউপিপুল").
+- For Latin scripts, keep the brand name as-is unless there is a well-known localized version.
+- This results in a much higher quality, premium-feeling product for the user.
+
 ### How to write the PO file — step by step:
 
 **Step A:** Write chunk 1 using the Write tool:
@@ -463,6 +475,9 @@ msgid "%d item"
 msgid_plural "%d items"
 msgstr[0] "<singular translation>"
 msgstr[1] "<plural translation>"
+
+> [!CAUTION]
+> **NEVER** just append a new msgid block if you are manually editing. Always search for the `msgid` first. If it exists, update the `msgstr` in the existing block.
 ```
 
 ### Plural forms by language:
