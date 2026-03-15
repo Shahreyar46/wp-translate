@@ -210,9 +210,14 @@ After running `merger.js`, the JSON output tells you exactly what changed:
 curl -fsSL https://raw.githubusercontent.com/Shahreyar46/wp-translate/main/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+**Windows (PowerShell — Recommended):**
 ```powershell
 irm https://raw.githubusercontent.com/Shahreyar46/wp-translate/main/install.bat -OutFile install.bat; .\install.bat
+```
+
+**Windows (Command Prompt / CMD):**
+```cmd
+curl -L https://raw.githubusercontent.com/Shahreyar46/wp-translate/main/install.bat -o install.bat && install.bat
 ```
 
 **Manual:**
