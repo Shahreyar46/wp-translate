@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 const fs = require('fs');
-const potFile = process.argv[2];
-const content = fs.readFileSync(potFile, 'utf8');
-const blocks = content.split(/\n\n+/);
-const strings = [];
-for (const block of blocks) {
-  if (!block.includes('msgid')) continue;
-  const match = block.match(/^msgid "((?:\\.|[^"\\])*)"$/m);
-  if (match && match[1] && match[1] !== '') strings.push(match[1]);
+const gettextParser = require('gettext-parser');
+const file = process.argv[2];
+
+if (!file || !fs.existsSync(file)) {
+    console.error('Usage: node extract-strings.js <file.po|file.pot>');
+    process.exit(1);
 }
-console.log(JSON.stringify(strings, null, 0));
+
+const input = fs.readFileSync(file);
+const po = gettextParser.po.parse(input);
+const ids = [];
+
+for (const ctx in po.translations) {
+    for (const id in po.translations[ctx]) {
+        if (id !== '') ids.push(id);
+    }
+}
+
+console.log(JSON.stringify(ids, null, 2));

@@ -51,17 +51,19 @@ const PHP_FUNCTIONS = [
 function extractPhpStrings(content, filePath) {
   const strings = [];
   // Match: function( 'string', ..., 'domain' )  or  function( "string", ..., "domain" )
+  // Use [\s\S] instead of . to match newlines (dotAll mode)
   const fnPattern = new RegExp(
-    `(${PHP_FUNCTIONS.join('|')})\\s*\\(\\s*(['"])((?:\\\\.|(?!\\2).)*?)\\2`,
+    `(${PHP_FUNCTIONS.join('|')})\\s*\\(\\s*(['"])((?:\\\\.|(?!\\2)[\\s\\S])*?)\\2`,
     'g'
   );
 
   let match;
-  const lines = content.split('\n');
   while ((match = fnPattern.exec(content)) !== null) {
     const fn = match[1];
-    const str = match[3].replace(/\\'/g, "'").replace(/\\"/g, '"');
+    const str = match[3];
     if (!str.trim()) continue;
+
+    const unescapedStr = str.replace(/\\'/g, "'").replace(/\\"/g, '"');
 
     // Get line number
     const lineNum = content.substring(0, match.index).split('\n').length;
@@ -74,26 +76,26 @@ function extractPhpStrings(content, filePath) {
 
     // Handle plural forms (_n, _nx, _n_noop, _nx_noop)
     if (fn.startsWith('_n')) {
-      const pluralMatch = afterMatch.match(/^\s*,\s*(['"])((?:\\.|(?!\1).)*?)\1/);
+      const pluralMatch = afterMatch.match(/^\s*,\s*(['"])((?:\\.|(?!\1)[\s\S])*?)\1/);
       strings.push({
-        msgid: str,
-        msgid_plural: pluralMatch ? pluralMatch[2] : '',
+        msgid: unescapedStr,
+        msgid_plural: pluralMatch ? pluralMatch[2].replace(/\\'/g, "'").replace(/\\"/g, '"') : '',
         msgstr: ['', ''],
         reference: `${relPath}:${lineNum}`,
         fn,
       });
     } else if (fn.includes('_x') || fn === 'esc_html_x' || fn === 'esc_attr_x') {
-      const ctxMatch = afterMatch.match(/^\s*,\s*(['"])((?:\\.|(?!\1).)*?)\1/);
+      const ctxMatch = afterMatch.match(/^\s*,\s*(['"])((?:\\.|(?!\1)[\s\S])*?)\1/);
       strings.push({
-        msgid: str,
-        msgctxt: ctxMatch ? ctxMatch[2] : '',
+        msgid: unescapedStr,
+        msgctxt: ctxMatch ? ctxMatch[2].replace(/\\'/g, "'").replace(/\\"/g, '"') : '',
         msgstr: [''],
         reference: `${relPath}:${lineNum}`,
         fn,
       });
     } else {
       strings.push({
-        msgid: str,
+        msgid: unescapedStr,
         msgstr: [''],
         reference: `${relPath}:${lineNum}`,
         fn,
@@ -110,7 +112,8 @@ const JS_FUNCTIONS = ['__', '_n', '_x', '_nx', 'wp.i18n.__'];
 function extractJsStrings(content, filePath) {
   const strings = [];
   // Match: __( 'string' ) or __( 'string', 'domain' )
-  const fnPattern = /(?:wp\.i18n\.)?(__|\b_n\b|\b_x\b|\b_nx\b)\s*\(\s*(['"`])((?:\\.|(?!\2).)*?)\2/g;
+  // Support backticks (template literals) too
+  const fnPattern = /(?:wp\.i18n\.)?(__|\b_n\b|\b_x\b|\b_nx\b)\s*\(\s*(['"`])((?:\\.|(?!\2)[\s\S])*?)\2/g;
 
   let match;
   while ((match = fnPattern.exec(content)) !== null) {

@@ -205,55 +205,47 @@ When there are 10 or more empty strings to translate — which is almost always 
 
 **Instead, use this mandatory batch approach:**
 
-**Step 1:** Write this as a script file using the **Write tool** (NOT bash heredoc — heredoc mangles backslashes on Windows) to `C:/Users/<USER>/extract_untranslated.js`, then run it:
+**Step 1:** Write this as a script file using the **Write tool** to `C:/Users/<USER>/extract_untranslated.js`, then run it:
 
 ```javascript
 const fs = require('fs'), path = require('path');
+const gettextParser = require('gettext-parser');
 const dir = '<PLUGIN_PATH>/languages';
 
-// Brand/product names and technical terms that are intentionally identical in all languages.
-// Add plugin-specific brand names here as you discover them.
 const keepAsIsSet = new Set([
-  // WordPress ecosystem tool names — same in all languages
   'Gutenberg', 'Elementor', 'Shortcode', 'Add-ons', 'Self-Hosted',
-  // Common technical terms kept as-is in most languages
   'Simulcast', 'APP ID', 'Documentation', 'Configurations',
-  // Product/service names — MUST stay as-is
-  // Add plugin-specific brands here e.g.: 'MyPlugin', 'Jitsi Meet', 'WPPOOL'
 ]);
 
-// Strings where msgstr==msgid is CORRECT and should NOT be flagged:
-// - URLs (http/https/ftp)
-// - Pure emoji strings (including smart quotes around emoji)
-// - Pure numbers
-// - ALL-LOWERCASE short tokens/slugs (e.g. jitsi, zoom, meeting, video)
-// - Brand names listed in keepAsIsSet above
-// NOTE: Title Case words like "Name", "Domain", "Width" ARE real UI labels — do NOT skip them
-function isIntentionallyIdentical(raw) {
-  const s = raw.replace(/^"|"$/g, '').replace(/\\"/g, '"');
-  if (/^https?:\/\//.test(s)) return true;                          // URL
-  if (/^[\p{Emoji}\s]+$/u.test(s)) return true;                     // emoji only
-  if (/^\d+$/.test(s)) return true;                                  // pure number
-  if (/^[a-z][a-z0-9_-]*$/.test(s) && s.length <= 20) return true; // all-lowercase slug
-  if (keepAsIsSet.has(s)) return true;                               // known brand/tool name
+function isIntentionallyIdentical(s) {
+  if (/^https?:\/\//.test(s)) return true;
+  if (/^[\p{Emoji}\s]+$/u.test(s)) return true;
+  if (/^\d+$/.test(s)) return true;
+  if (/^[a-z][a-z0-9_-]*$/.test(s) && s.length <= 20) return true;
+  if (keepAsIsSet.has(s)) return true;
   return false;
 }
 
 const poFiles = fs.readdirSync(dir).filter(f => f.endsWith('.po'));
 poFiles.forEach(f => {
-  const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
+  const input = fs.readFileSync(path.join(dir, f));
+  const po = gettextParser.po.parse(input);
   const missing = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith('msgstr ') && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1] !== 'msgid ""') {
-      const idRaw = lines[i-1].replace(/^msgid /, '');
-      const strRaw = lines[i].replace(/^msgstr /, '');
-      const isEmpty = strRaw === '""';
-      const isSameAsId = strRaw === idRaw;
-      if ((isEmpty || isSameAsId) && !isIntentionallyIdentical(idRaw)) {
-        missing.push(idRaw.replace(/^"/, '').replace(/"$/, ''));
+
+  for (const ctx in po.translations) {
+    for (const id in po.translations[ctx]) {
+      if (id === '') continue;
+      const entry = po.translations[ctx][id];
+      const str = entry.msgstr[0] || '';
+      const isEmpty = str === '';
+      const isSameAsId = str === id;
+      
+      if ((isEmpty || isSameAsId) && !isIntentionallyIdentical(id)) {
+        missing.push(id);
       }
     }
   }
+
   if (missing.length) {
     console.log(f + ' (' + missing.length + ' untranslated):');
     missing.forEach((s, i) => console.log('  ' + i + ': ' + s));
@@ -265,56 +257,50 @@ poFiles.forEach(f => {
 
 **Step 2:** Write the patch script using the **Write tool** to `C:/Users/<USER>/patch_translations.js`.
 
-> **CRITICAL — Windows escaping rule**: NEVER write this script using bash heredoc (`cat << 'EOF'`). Heredoc on Windows mangles backslash escape sequences (turning `\\` into `\`, breaking regex patterns). Always use the Write tool to create the file.
-
 ```javascript
 const fs = require('fs'), path = require('path');
+const gettextParser = require('gettext-parser');
 const langDir = '<PLUGIN_PATH>/languages';
 
-// Translation dictionaries keyed by language code
 const translations = {
   'fr_FR': {
     'Settings': 'Paramètres',
     'Referral Settings': 'Paramètres de parrainage',
-    // ... ALL empty strings for this language
   },
   'de_DE': {
     'Settings': 'Einstellungen',
-    // ... ALL empty strings for this language
   },
-  // ... all other languages
 };
 
-// Auto-detects the .po file for a given language code by scanning the languages directory.
-// Handles both "domain-langCode.po" and "langCode.po" naming conventions.
-// Also handles smart-quote apostrophes (U+2019 = '') vs regular apostrophes (') in msgid —
-// some plugin source strings use curly/smart quotes which look the same visually but differ in bytes.
 function patchPoFile(langCode, dict) {
   const files = fs.readdirSync(langDir).filter(f =>
     f.endsWith('-' + langCode + '.po') || f === langCode + '.po'
   );
   if (files.length === 0) { console.log('Not found for: ' + langCode); return; }
   files.forEach(fname => {
-    const file = path.join(langDir, fname);
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
+    const filePath = path.join(langDir, fname);
+    const input = fs.readFileSync(filePath);
+    const po = gettextParser.po.parse(input);
     let changed = 0;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('msgstr ') && lines[i-1] && lines[i-1].startsWith('msgid ') && lines[i-1] !== 'msgid ""') {
-        // Unescape the msgid for dictionary lookup
-        // Handles: escaped double-quotes (\"), escaped backslashes (\\),
-        // AND both regular apostrophes (') and smart/curly apostrophes (U+2019 ')
-        const msgid = lines[i-1].replace(/^msgid "/, '').replace(/"$/, '')
-          .replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, '\\');
-        // Patch if: msgstr is empty OR msgstr equals msgid (not actually translated)
-        const isUntranslated = lines[i] === 'msgstr ""' || lines[i] === lines[i-1].replace(/^msgid /, 'msgstr ');
-        if (isUntranslated && dict[msgid]) {
-          const t = dict[msgid].replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'\\n');
-          lines[i] = 'msgstr "' + t + '"';
+
+    for (const ctx in po.translations) {
+      for (const id in po.translations[ctx]) {
+        if (id === '') continue;
+        const entry = po.translations[ctx][id];
+        const currentStr = entry.msgstr[0] || '';
+        const isUntranslated = currentStr === '' || currentStr === id;
+
+        if (isUntranslated && dict[id]) {
+          entry.msgstr = [dict[id]];
           changed++;
         }
       }
     }
-    fs.writeFileSync(file, lines.join('\n'), 'utf8');
+    
+    if (changed > 0) {
+      const output = gettextParser.po.compile(po);
+      fs.writeFileSync(filePath, output);
+    }
     console.log(fname + ': ' + changed + ' strings patched');
   });
 }
